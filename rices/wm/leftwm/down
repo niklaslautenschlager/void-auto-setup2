@@ -1,0 +1,4 @@
+#!/bin/sh
+pkill -x polybar 2>/dev/null || true
+pkill -x picom 2>/dev/null || true
+pkill -x dunst 2>/dev/null || true

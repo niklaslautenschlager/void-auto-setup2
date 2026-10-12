@@ -1,0 +1,142 @@
+#!/bin/sh
+# void-session: start a riced window-manager session with everything the
+# Void handbook says a non-systemd session needs, every time:
+#
+#   * XDG_RUNTIME_DIR      (handbook: elogind/turnstile set it, otherwise you must)
+#   * a D-Bus session bus  (handbook: launch the WM with dbus-run-session)
+#   * PipeWire             (handbook: start it from the session) exactly once,
+#                          stale stacks from older logins are restarted
+#   * XDG_CURRENT_DESKTOP / XDG_SESSION_TYPE (portals.conf selection, toolkits)
+#
+# Usage:
+#   void-session <id>      e.g. void-session hyprland, void-session dwm
+#   void-session --list    show installed sessions
+# Works from a display manager, from greetd/tuigreet, or from a plain TTY
+# (X11 sessions start their own X server via startx).
+#
+# Per-user overrides: ~/.config/void-session/env (all sessions) and
+# ~/.config/void-session/<id>.env are sourced before the WM starts.
+
+SESS_DIR=/usr/local/share/void-postinstall/sessions
+self="$(command -v void-session 2>/dev/null || echo "$0")"
+
+if [ "${1:-}" = "--list" ] || [ -z "${1:-}" ]; then
+  echo "Available sessions:"
+  for f in "$SESS_DIR"/*.env; do
+    [ -e "$f" ] || continue
+    ( . "$f"; printf '  %-12s %-8s %s (rice: %s)\n' "$(basename "$f" .env)" "$WM_TYPE" "$WM_NAME" "$WM_RICE" )
+  done
+  [ -z "${1:-}" ] && exit 2
+  exit 0
+fi
+
+id="$1"
+[ -r "$SESS_DIR/$id.env" ] || { echo "void-session: unknown session '$id' (try --list)" >&2; exit 2; }
+WM_SELFSTART=0
+WM_FALLBACK=""
+# shellcheck source=/dev/null
+. "$SESS_DIR/$id.env"
+
+# --- X11 from a bare TTY: start an X server and come back in -----------------
+if [ "$WM_TYPE" = x11 ] && [ -z "${DISPLAY:-}" ]; then
+  exec startx "$self" "$id"
+fi
+
+# --- XDG_RUNTIME_DIR ----------------------------------------------------------
+if [ -z "${XDG_RUNTIME_DIR:-}" ] || [ ! -d "$XDG_RUNTIME_DIR" ]; then
+  if [ -d "/run/user/$(id -u)" ] && [ -O "/run/user/$(id -u)" ]; then
+    XDG_RUNTIME_DIR="/run/user/$(id -u)"
+  else
+    XDG_RUNTIME_DIR="/tmp/$(id -u)-runtime-dir"
+    mkdir -p "$XDG_RUNTIME_DIR" && chmod 0700 "$XDG_RUNTIME_DIR"
+  fi
+  export XDG_RUNTIME_DIR
+fi
+
+# --- D-Bus session bus: re-enter under dbus-run-session if there is none -----
+if [ -z "${DBUS_SESSION_BUS_ADDRESS:-}" ]; then
+  exec dbus-run-session -- "$self" "$@"
+fi
+
+# --- environment ----------------------------------------------------------------
+export XDG_SESSION_TYPE="$WM_TYPE"
+export XDG_CURRENT_DESKTOP="$WM_XDG"
+export XDG_SESSION_DESKTOP="$id" DESKTOP_SESSION="$id"
+export VOID_SESSION="$id" VOID_RICE="$WM_RICE"
+export _JAVA_AWT_WM_NONREPARENTING=1
+if [ "$WM_TYPE" = wayland ]; then
+  export MOZ_ENABLE_WAYLAND=1
+  export QT_QPA_PLATFORM="wayland;xcb"
+  export QT_WAYLAND_DISABLE_WINDOWDECORATION=1
+  export SDL_VIDEODRIVER="wayland,x11"
+  export ELECTRON_OZONE_PLATFORM_HINT=auto
+  export CLUTTER_BACKEND=wayland
+fi
+[ -r /etc/void-postinstall/session.env ] && . /etc/void-postinstall/session.env
+[ -r "$HOME/.config/void-session/env" ] && . "$HOME/.config/void-session/env"
+[ -r "$HOME/.config/void-session/$id.env" ] && . "$HOME/.config/void-session/$id.env"
+
+# --- logging --------------------------------------------------------------------
+logdir="${XDG_STATE_HOME:-$HOME/.local/state}/void-session"
+mkdir -p "$logdir"
+[ -f "$logdir/$id.log" ] && mv -f "$logdir/$id.log" "$logdir/$id.log.old"
+exec >>"$logdir/$id.log" 2>&1
+echo "---- $(date '+%F %T') starting $WM_NAME (rice: $WM_RICE)"
+echo "XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR DBUS_SESSION_BUS_ADDRESS=$DBUS_SESSION_BUS_ADDRESS"
+
+# Render the selected rice once when the session is first used.
+void-rice apply --if-missing "$WM_RICE" || echo "void-session: rice setup failed for $WM_RICE" >&2
+
+# --- X11 housekeeping -------------------------------------------------------------
+if [ "$WM_TYPE" = x11 ]; then
+  [ -r "$HOME/.Xresources" ] && xrdb -merge "$HOME/.Xresources"
+  xsetroot -cursor_name left_ptr 2>/dev/null
+  dbus-update-activation-environment DISPLAY XAUTHORITY XDG_CURRENT_DESKTOP XDG_SESSION_TYPE 2>/dev/null
+fi
+
+# --- audio: one clean PipeWire stack for this session -------------------------
+export VOID_SESSION_AUDIO=1
+void-pipewire --bg
+
+# --- remember who we are, so `rice logout` can end the session ------------------
+echo $$ >"$XDG_RUNTIME_DIR/void-session.pid"
+
+# WMs without an autostart mechanism get the rice's autostart from here
+if [ "$WM_SELFSTART" = 1 ]; then
+  rice autostart &
+fi
+
+# --- run the window manager ----------------------------------------------------------
+set -f
+cmd="$WM_EXEC"
+if ! command -v "${cmd%% *}" >/dev/null 2>&1 && [ -n "$WM_FALLBACK" ]; then
+  echo "void-session: ${cmd%% *} not found, using $WM_FALLBACK"
+  cmd="$WM_FALLBACK"
+fi
+if [ "$WM_SELFSTART" = 1 ]; then
+  reloadf="$XDG_RUNTIME_DIR/void-session.reload"
+  pidf="$XDG_RUNTIME_DIR/void-session.wm.pid"
+  while :; do
+    rm -f "$reloadf"
+    # shellcheck disable=SC2086
+    $cmd &
+    wm_pid=$!
+    printf '%s\n' "$wm_pid" >"$pidf"
+    wait "$wm_pid"
+    rc=$?
+    rm -f "$pidf"
+    [ -e "$reloadf" ] || break
+    echo "---- restarting $WM_NAME ----"
+  done
+else
+  # shellcheck disable=SC2086
+  $cmd
+  rc=$?
+fi
+set +f
+
+echo "---- $(date '+%F %T') $WM_NAME exited ($rc)"
+void-pipewire --stop
+rm -f "$XDG_RUNTIME_DIR/void-session.pid"
+rm -f "$XDG_RUNTIME_DIR/void-session.wm.pid" "$XDG_RUNTIME_DIR/void-session.reload"
+exit "$rc"

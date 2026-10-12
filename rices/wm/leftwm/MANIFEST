@@ -1,0 +1,5 @@
+# template    destination (relative to $HOME)   mode
+config.ron    .config/leftwm/config.ron          0644
+up            .config/leftwm/themes/current/up   0755
+down            .config/leftwm/themes/current/down 0755
+theme.ron     .config/leftwm/themes/current/theme.ron 0644

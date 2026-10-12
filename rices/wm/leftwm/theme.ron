@@ -1,0 +1,7 @@
+(
+    default_border_color: "@@bg_hi@@",
+    floating_border_color: "@@accent2@@",
+    focused_border_color: "@@accent@@",
+    border_width: @@border@@,
+    margin: @@gaps_out@@,
+)

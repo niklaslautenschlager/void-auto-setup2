@@ -1,0 +1,2 @@
+# template   destination (relative to $HOME)   mode
+init         .config/river/init                0755

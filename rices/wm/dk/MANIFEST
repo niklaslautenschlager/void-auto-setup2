@@ -1,0 +1,3 @@
+# template    destination (relative to $HOME)   mode
+dkrc          .config/dk/dkrc                   0755
+sxhkdrc       .config/dk/sxhkdrc                0644

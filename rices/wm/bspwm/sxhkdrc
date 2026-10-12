@@ -1,0 +1,46 @@
+# @@name@@ keymap shared with the other rices.
+super + Return
+    rice term
+super + {d,space}
+    rice launch
+super + q
+    bspc node -c
+super + f
+    bspc node -t '~fullscreen'
+super + v
+    bspc node -t '~floating'
+super + Escape
+    rice lock
+super + shift + Escape
+    rice power
+super + shift + r
+    bspc wm -r
+Print
+    rice shot full
+shift + Print
+    rice shot area
+
+super + {_,shift + }{h,j,k,l}
+    bspc node -{f,s} {west,south,north,east}
+super + {_,shift + }{1-9}
+    bspc {desktop -f,node -d} '^{1-9}'
+super + ctrl + {h,j,k,l}
+    bspc node -z {left -20 0,bottom 0 20,top 0 -20,right 20 0}
+XF86AudioRaiseVolume
+    rice vol up
+XF86AudioLowerVolume
+    rice vol down
+XF86AudioMute
+    rice vol mute
+XF86AudioMicMute
+    rice vol mic
+XF86MonBrightnessUp
+    rice light up
+XF86MonBrightnessDown
+    rice light down
+XF86AudioPlay
+    playerctl play-pause
+XF86AudioNext
+    playerctl next
+XF86AudioPrev
+    playerctl previous

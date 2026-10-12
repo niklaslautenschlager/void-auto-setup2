@@ -1,0 +1,52 @@
+/* @@name@@ rice: Waybar, "blocks" (solid bar, every module its own colour block) */
+* {
+    font-family: "@@font_ui@@", "Symbols Nerd Font";
+    font-size: @@font_px@@px;
+    min-height: 0;
+    border: none;
+    border-radius: 0;
+}
+window#waybar { background: @@bg@@; color: @@fg@@; }
+#workspaces button, #tags button {
+    color: @@fg_dim@@;
+    background: @@bg_alt@@;
+    padding: 0 10px;
+    margin: 4px 2px;
+    border-radius: @@radius_small@@px;
+    box-shadow: none;
+    text-shadow: none;
+}
+#workspaces button:hover, #tags button:hover { background: @@bg_hi@@; color: @@fg@@; }
+#workspaces button.active, #workspaces button.focused, #tags button.focused {
+    background: @@accent@@;
+    color: @@bg@@;
+}
+#tags button.occupied { color: @@fg@@; }
+#workspaces button.urgent, #tags button.urgent { background: @@urgent@@; color: @@bg@@; }
+#custom-void, #clock, #cpu, #memory, #wireplumber, #network, #battery,
+#backlight, #idle_inhibitor, #custom-power, #mode {
+    padding: 0 12px;
+    margin: 4px 2px;
+    border-radius: @@radius_small@@px;
+    color: @@bg@@;
+}
+#window, #tray, #taskbar { padding: 0 10px; color: @@fg_dim@@; }
+#custom-void { background: @@accent@@; }
+#clock { background: @@accent2@@; }
+#cpu { background: @@info@@; }
+#memory { background: @@c5@@; }
+#wireplumber { background: @@c6@@; }
+#wireplumber.muted { background: @@bg_hi@@; color: @@fg_dim@@; }
+#network { background: @@good@@; }
+#network.disconnected { background: @@urgent@@; }
+#battery { background: @@good@@; }
+#battery.warning:not(.charging) { background: @@accent2@@; }
+#battery.critical:not(.charging) { background: @@urgent@@; }
+#backlight { background: @@c3@@; }
+#idle_inhibitor { background: @@bg_hi@@; color: @@fg@@; }
+#idle_inhibitor.activated { background: @@accent2@@; color: @@bg@@; }
+#custom-power { background: @@urgent@@; margin-right: 6px; }
+#mode { background: @@accent2@@; }
+#taskbar button.active { background: @@bg_hi@@; }
+tooltip { background: @@bg_alt@@; border: 2px solid @@accent@@; border-radius: @@radius_small@@px; }
+tooltip label { color: @@fg@@; }

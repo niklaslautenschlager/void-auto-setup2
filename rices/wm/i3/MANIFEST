@@ -1,0 +1,2 @@
+# template    destination (relative to $HOME)   mode
+config        .config/i3/config                0644

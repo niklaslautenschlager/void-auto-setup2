@@ -1,0 +1,11 @@
+// @@name@@ status bar. Wayfire has no Waybar workspace protocol.
+{
+    "layer": "top",
+    "position": "@@bar_pos@@",
+    "height": @@bar_h@@,
+    "spacing": 8,
+    "modules-left": ["custom/void"],
+    "modules-center": ["clock"],
+    "modules-right": ["cpu", "memory", "wireplumber", "network", "tray", "custom/power"],
+    "include": ["@@rice_dir@@/waybar/modules.jsonc"]
+}

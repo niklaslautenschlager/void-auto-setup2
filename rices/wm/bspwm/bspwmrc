@@ -1,0 +1,22 @@
+#!/bin/sh
+# @@name@@: Sakura BSP tree and warm blossom accents.
+bspc monitor -d 1 2 3 4 5 6 7 8 9
+bspc config border_width @@border@@
+bspc config window_gap @@gaps_out@@
+bspc config split_ratio 0.52
+bspc config borderless_monocle true
+bspc config gapless_monocle true
+bspc config focused_border_color '@@accent@@'
+bspc config normal_border_color '@@bg_hi@@'
+bspc config active_border_color '@@accent2@@'
+bspc config urgent_border_color '@@urgent@@'
+bspc config presel_feedback_color '@@accent2@@'
+bspc config automatic_scheme longest_side
+bspc config initial_polarity second_child
+bspc config removal_adjustment true
+bspc config pointer_modifier mod4
+bspc config pointer_action1 move
+bspc config pointer_action2 resize_corner
+bspc config pointer_action3 resize_side
+pgrep -x sxhkd >/dev/null 2>&1 || sxhkd -c "$HOME/.config/sxhkd/sxhkdrc" &
+rice autostart

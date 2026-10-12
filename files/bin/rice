@@ -1,0 +1,324 @@
+#!/bin/sh
+# rice: one helper behind every void-postinstall rice, so all window managers
+# share the same, tested behaviour and their configs stay small.
+#
+#   rice term [cmd...]        terminal in the rice's colours (foot / alacritty)
+#   rice launch [drun|run|window]   rofi launcher
+#   rice power                lock / logout / suspend / reboot / power off menu
+#   rice shot [area|full|window]    screenshot -> ~/Pictures/Screenshots + clipboard
+#   rice vol up|down|mute|mic volume via wpctl, with an on-screen bar
+#   rice light up|down        backlight via brightnessctl
+#   rice lock [--wait]        lock screen (hyprlock / swaylock / i3lock-color)
+#   rice idle                 idle daemon: lock after 5 min, screen off after 10
+#   rice dpms on|off          screen power (compositor-specific)
+#   rice wall                 set the wallpaper
+#   rice bar                  (re)start the status bar
+#   rice notifyd              (re)start the notification daemon
+#   rice autostart            everything a session needs, started once
+#   rice reload               restart a session-managed dwm/FrankenWM process
+#   rice logout               end the current void-session
+#   rice info                 show which rice/session is active
+#
+# The rice is taken from $VOID_RICE (set by void-session), or guessed from
+# $XDG_CURRENT_DESKTOP when a WM was started some other way.
+
+RICE_ROOT="${XDG_CONFIG_HOME:-$HOME/.config}/void-rice"
+uid=$(id -u)
+
+rice="${VOID_RICE:-}"
+if [ -z "$rice" ]; then
+  case "$(printf '%s' "${XDG_CURRENT_DESKTOP:-}" | tr '[:upper:]' '[:lower:]')" in
+    hyprland*) rice=ember ;;     sway*)    rice=tidewater ;; river*)  rice=moss ;;
+    niri*)     rice=dusk ;;      mango*)   rice=orchard ;;   qtile*)  rice=circuit ;;
+    wayfire*)  rice=aurora ;;    i3*)      rice=graphite ;;  awesome*) rice=copper ;;
+    dwm*)      rice=monolith ;;  dk*)      rice=glacier ;;   frankenwm*) rice=bolt ;;
+    leftwm*)   rice=dune ;;      spectrwm*) rice=spectrum ;; bspwm*)  rice=sakura ;;
+    *) rice="$(ls "$RICE_ROOT" 2>/dev/null | head -n1)" ;;
+  esac
+fi
+RD="$RICE_ROOT/$rice"
+rice_bar=none rice_tray=0 rice_compositor=0 rice_wall=1
+# shellcheck source=/dev/null
+[ -r "$RD/palette.sh" ] && . "$RD/palette.sh"
+
+if [ -n "${XDG_SESSION_TYPE:-}" ] && [ "$XDG_SESSION_TYPE" != tty ]; then
+  ST="$XDG_SESSION_TYPE"
+elif [ -n "${WAYLAND_DISPLAY:-}" ]; then ST=wayland
+else ST=x11
+fi
+session="${VOID_SESSION:-}"
+
+have() { command -v "$1" >/dev/null 2>&1; }
+running() { pgrep -u "$uid" -x "$1" >/dev/null 2>&1; }
+bg() { setsid -f "$@" >>"${XDG_RUNTIME_DIR:-/tmp}/rice-$rice.log" 2>&1 </dev/null; }
+
+# osd TAG PERCENT TEXT: replaceable notification with a progress bar
+osd() {
+  have notify-send || return 0
+  notify-send -a rice -t 1500 -u low \
+    -h "string:x-canonical-private-synchronous:rice-$1" \
+    -h "string:x-dunst-stack-tag:rice-$1" \
+    -h "int:value:$2" "$3"
+}
+
+svc_on() { [ -L "/var/service/$1" ] || [ -L "/etc/runit/runsvdir/default/$1" ]; }
+
+# ---------------------------------------------------------------------------
+cmd_term() {
+  [ "${1:-}" = -e ] && shift
+  if [ "$ST" = wayland ] && have foot; then
+    exec foot -c "$RD/foot.ini" "$@"
+  elif have alacritty; then
+    if [ $# -gt 0 ]; then exec alacritty --config-file "$RD/alacritty.toml" -e "$@"; fi
+    exec alacritty --config-file "$RD/alacritty.toml"
+  fi
+  for t in ${TERMINAL:-} kitty foot xterm; do
+    if have "$t"; then
+      if [ $# -gt 0 ]; then exec "$t" -e "$@"; fi
+      exec "$t"
+    fi
+  done
+  echo "rice: no terminal emulator found" >&2; exit 1
+}
+
+cmd_launch() {
+  exec rofi -show "${1:-drun}" -show-icons -theme "$RD/rofi.rasi"
+}
+
+cmd_power() {
+  choice="$(printf '%s\n' "󰌾  Lock" "󰍃  Log out" "󰤄  Suspend" "󰜉  Reboot" "󰐥  Power off" |
+    rofi -dmenu -i -p "power" -theme "$RD/rofi.rasi" -theme-str 'listview { lines: 5; }')"
+  case "$choice" in
+    *Lock)       cmd_lock ;;
+    *"Log out")  cmd_logout ;;
+    *Suspend)    cmd_lock; sleep 1; loginctl suspend 2>/dev/null || sudo -n zzz ;;
+    *Reboot)     loginctl reboot 2>/dev/null || sudo -n reboot ;;
+    *"Power off") loginctl poweroff 2>/dev/null || sudo -n poweroff ;;
+  esac
+}
+
+cmd_shot() {
+  mode="${1:-area}"
+  dir="$(xdg-user-dir PICTURES 2>/dev/null || echo "$HOME/Pictures")/Screenshots"
+  mkdir -p "$dir"
+  f="$dir/$(date +%Y-%m-%d_%H-%M-%S).png"
+  if [ "$ST" = wayland ]; then
+    case "$mode" in
+      full) grim "$f" ;;
+      *)    g="$(slurp)" || exit 0; grim -g "$g" "$f" ;;
+    esac
+    [ -s "$f" ] && wl-copy --type image/png <"$f"
+  else
+    case "$mode" in
+      full)   maim "$f" ;;
+      window) maim -i "$(xdotool getactivewindow)" "$f" ;;
+      *)      maim -s "$f" || exit 0 ;;
+    esac
+    [ -s "$f" ] && xclip -selection clipboard -t image/png -i "$f"
+  fi
+  [ -s "$f" ] && have notify-send && notify-send -a rice -i "$f" "Screenshot saved" "${f#"$HOME"/} (copied)"
+}
+
+cmd_vol() {
+  case "${1:-}" in
+    up)   wpctl set-volume -l 1.0 @DEFAULT_AUDIO_SINK@ 5%+ ;;
+    down) wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%- ;;
+    mute) wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle ;;
+    mic)  wpctl set-mute @DEFAULT_AUDIO_SOURCE@ toggle
+          case "$(wpctl get-volume @DEFAULT_AUDIO_SOURCE@)" in
+            *MUTED*) osd mic 0 "Microphone muted" ;; *) osd mic 100 "Microphone on" ;;
+          esac; return ;;
+    *) echo "usage: rice vol up|down|mute|mic" >&2; exit 2 ;;
+  esac
+  v="$(wpctl get-volume @DEFAULT_AUDIO_SINK@ 2>/dev/null)"
+  pct="$(printf '%s' "$v" | awk '{printf "%d", $2 * 100}')"
+  case "$v" in *MUTED*) osd vol 0 "Muted" ;; *) osd vol "$pct" "Volume $pct%" ;; esac
+}
+
+cmd_light() {
+  case "${1:-}" in
+    up)   brightnessctl -q set 5%+ ;;
+    down) brightnessctl -q -n 1% set 5%- ;;
+    *) echo "usage: rice light up|down" >&2; exit 2 ;;
+  esac
+  pct="$(brightnessctl -m 2>/dev/null | cut -d, -f4 | tr -d %)"
+  osd light "${pct:-0}" "Brightness ${pct:-?}%"
+}
+
+cmd_lock() {
+  wait_flag="${1:-}"
+  if [ "$ST" = wayland ]; then
+    if [ "$session" = hyprland ] && have hyprlock; then
+      running hyprlock || exec hyprlock
+      exit 0
+    fi
+    running swaylock && exit 0
+    exec swaylock -f -C "$RD/swaylock.conf"
+  fi
+  running i3lock && exit 0
+  # i3lock-color wants rrggbbaa without '#'
+  h() { printf '%s' "${1#\#}"; }
+  set -- --nofork
+  [ "$wait_flag" = --wait ] || set --
+  exec i3lock "$@" --ignore-empty-password --show-failed-attempts \
+    --image="$RD/wallpaper.jpg" --fill \
+    --clock --indicator --radius=110 --ring-width=8 \
+    --inside-color="$(h "$bg_alt")e6" --ring-color="$(h "$accent")ff" --line-color=00000000 \
+    --separator-color=00000000 --keyhl-color="$(h "$accent2")ff" --bshl-color="$(h "$urgent")ff" \
+    --insidever-color="$(h "$bg_alt")e6" --ringver-color="$(h "$good")ff" \
+    --insidewrong-color="$(h "$bg_alt")e6" --ringwrong-color="$(h "$urgent")ff" \
+    --time-color="$(h "$fg")ff" --date-color="$(h "$fg_dim")ff" --verif-color="$(h "$fg")ff" \
+    --wrong-color="$(h "$urgent")ff" --layout-color="$(h "$fg_dim")ff" \
+    --time-str="%H:%M" --date-str="%A, %d %B" \
+    --time-font="$font_ui" --date-font="$font_ui" --verif-font="$font_ui" --wrong-font="$font_ui" \
+    --time-size=42 --date-size=16 --verif-text="…" --wrong-text="nope" --noinput-text="empty"
+}
+
+cmd_dpms() {
+  state="${1:-off}"
+  if [ "$ST" = x11 ]; then
+    xset dpms force "$state" >/dev/null 2>&1
+    return
+  fi
+  case "$session" in
+    sway)     swaymsg "output * power $state" >/dev/null ;;
+    niri)     [ "$state" = off ] && niri msg action power-off-monitors ;;
+    hyprland) if [ "$state" = off ]; then hyprctl dispatch 'hl.dsp.dpms({ action = "disable" })'
+              else hyprctl dispatch 'hl.dsp.dpms({ action = "enable" })'; fi >/dev/null ;;
+    *)        wlopm "--$state" '*' 2>/dev/null ;;
+  esac
+}
+
+cmd_idle() {
+  if [ "$ST" = wayland ]; then
+    if [ "$session" = hyprland ] && have hypridle; then
+      running hypridle || bg hypridle
+      return
+    fi
+    running swayidle && return
+    bg swayidle -w \
+      timeout 300 'rice lock' \
+      timeout 600 'rice dpms off' resume 'rice dpms on' \
+      before-sleep 'rice lock'
+  else
+    running xss-lock && return
+    xset s 300 300 2>/dev/null
+    bg xss-lock --transfer-sleep-lock -- rice lock --wait
+  fi
+}
+
+cmd_wall() {
+  img="$RD/wallpaper.jpg"
+  if [ "$ST" = wayland ]; then
+    pkill -u "$uid" -x swaybg 2>/dev/null
+    bg swaybg -m fill -i "$img"
+  else
+    xsetroot -solid "${bg:-#000000}" 2>/dev/null
+    xwallpaper --zoom "$img" 2>/dev/null
+  fi
+}
+
+cmd_bar() {
+  case "$rice_bar" in
+    waybar)
+      pkill -u "$uid" -x waybar 2>/dev/null; sleep 0.2
+      bg waybar -c "$RD/waybar/config.jsonc" -s "$RD/waybar/style.css" ;;
+    polybar)
+      pkill -u "$uid" -x polybar 2>/dev/null; sleep 0.2
+      # tell polybar what this machine actually has
+      for p in /sys/class/power_supply/*; do
+        [ -e "$p/type" ] || continue
+        case "$(cat "$p/type")" in
+          Battery) [ -z "${BATTERY:-}" ] && BATTERY="${p##*/}" ;;
+          Mains)   [ -z "${ADAPTER:-}" ] && ADAPTER="${p##*/}" ;;
+        esac
+      done
+      for p in /sys/class/backlight/*; do
+        [ -e "$p" ] && { BACKLIGHT_CARD="${p##*/}"; break; }
+      done
+      export BATTERY ADAPTER BACKLIGHT_CARD
+      for m in $(polybar --list-monitors 2>/dev/null | cut -d: -f1); do
+        MONITOR="$m" bg polybar -q -c "$RD/polybar.ini" main
+      done ;;
+  esac
+}
+
+cmd_notifyd() {
+  if [ "$ST" = wayland ]; then
+    pkill -u "$uid" -x mako 2>/dev/null
+    bg mako -c "$RD/mako.ini"
+  else
+    pkill -u "$uid" -x dunst 2>/dev/null
+    bg dunst -config "$RD/dunstrc"
+  fi
+}
+
+cmd_autostart() {
+  if [ "$ST" = wayland ]; then
+    dbus-update-activation-environment WAYLAND_DISPLAY DISPLAY XDG_CURRENT_DESKTOP \
+      XDG_SESSION_TYPE XDG_SESSION_DESKTOP 2>/dev/null
+  else
+    dbus-update-activation-environment DISPLAY XAUTHORITY XDG_CURRENT_DESKTOP XDG_SESSION_TYPE 2>/dev/null
+    if [ "$rice_compositor" = 1 ] && have picom && ! running picom; then
+      bg picom --config "$RD/picom.conf"
+    fi
+  fi
+  [ "$rice_wall" = 1 ] && cmd_wall
+  [ "$ST" = x11 ] && [ -n "${kb_layout:-}" ] && setxkbmap "$kb_layout" 2>/dev/null
+  cmd_notifyd
+  cmd_idle
+  if [ -x /usr/libexec/polkit-gnome-authentication-agent-1 ] && ! pgrep -u "$uid" -f polkit-gnome-authentication-agent-1 >/dev/null; then
+    bg /usr/libexec/polkit-gnome-authentication-agent-1
+  fi
+  [ "$rice_bar" != none ] && cmd_bar
+  if [ "$rice_tray" = 1 ]; then
+    sleep 1
+    if have nm-applet && svc_on NetworkManager && ! running nm-applet; then bg nm-applet --indicator; fi
+    if have blueman-applet && svc_on bluetoothd && ! running blueman-applet; then bg blueman-applet; fi
+  fi
+  if [ "$session" = dwm ] && ! pgrep -u "$uid" -f '[r]ice-dwm-status' >/dev/null 2>&1; then
+    setsid -f sh -c 'while :; do xsetroot -name "  $(date +"%a %d %b  %H:%M")  "; sleep 15; done' rice-dwm-status \
+      >>"${XDG_RUNTIME_DIR:-/tmp}/rice-$rice.log" 2>&1 </dev/null
+  fi
+  return 0
+}
+
+cmd_logout() {
+  pidf="${XDG_RUNTIME_DIR:-/tmp}/void-session.pid"
+  if [ -r "$pidf" ]; then
+    pkill -TERM -P "$(cat "$pidf")"
+  else
+    case "$session" in
+      sway) swaymsg exit ;; hyprland) hyprctl dispatch 'hl.dsp.exit()' ;;
+      niri) niri msg action quit --skip-confirmation ;; i3) i3-msg exit ;;
+      bspwm) bspc quit ;; *) echo "rice: no void-session to end" >&2 ;;
+    esac
+  fi
+}
+
+cmd_reload() {
+  case "$session" in
+    dwm|frankenwm)
+      pidf="${XDG_RUNTIME_DIR:-/tmp}/void-session.wm.pid"
+      reloadf="${XDG_RUNTIME_DIR:-/tmp}/void-session.reload"
+      [ -r "$pidf" ] || { echo "rice: no managed window manager to restart" >&2; return 1; }
+      wm_pid="$(cat "$pidf")"
+      case "$wm_pid" in ''|*[!0-9]*) echo "rice: invalid window-manager pid" >&2; return 1 ;; esac
+      : >"$reloadf"
+      kill -TERM "$wm_pid" ;;
+    *) echo "rice: this window manager has its own reload binding" >&2; return 1 ;;
+  esac
+}
+
+cmd_info() {
+  printf 'rice: %s (%s)\nsession: %s (%s)\nconfig: %s\nbar: %s\n' \
+    "$rice" "${name:-?}" "${session:-?}" "$ST" "$RD" "$rice_bar"
+}
+
+sub="${1:-info}"; [ $# -gt 0 ] && shift
+case "$sub" in
+  term|launch|power|shot|vol|light|lock|dpms|idle|wall|bar|notifyd|autostart|reload|logout|info)
+    "cmd_$sub" "$@" ;;
+  -h|--help|help) sed -n '2,24p' "$0" ;;
+  *) echo "rice: unknown command '$sub' (see rice --help)" >&2; exit 2 ;;
+esac

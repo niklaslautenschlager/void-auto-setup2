@@ -1,0 +1,49 @@
+/* @@name@@ rice: Waybar, "glass" (translucent floating bar) */
+* {
+    font-family: "@@font_ui@@", "Symbols Nerd Font";
+    font-size: @@font_px@@px;
+    min-height: 0;
+    border: none;
+    border-radius: 0;
+}
+window#waybar {
+    background: rgba(@@bg_rgb@@, 0.62);
+    color: @@fg@@;
+    border: 1px solid rgba(@@accent_rgb@@, 0.35);
+    border-radius: @@radius@@px;
+}
+#workspaces button, #tags button {
+    color: @@fg_dim@@;
+    background: transparent;
+    padding: 0 9px;
+    margin: 4px 1px;
+    border-radius: @@radius_small@@px;
+    box-shadow: none;
+    text-shadow: none;
+}
+#workspaces button:hover, #tags button:hover { background: rgba(@@fg_rgb@@, 0.08); color: @@fg@@; }
+#workspaces button.active, #workspaces button.focused, #tags button.focused {
+    background: rgba(@@accent_rgb@@, 0.22);
+    color: @@accent@@;
+}
+#tags button.occupied { color: @@fg@@; }
+#workspaces button.urgent, #tags button.urgent { background: rgba(@@urgent_rgb@@, 0.3); color: @@urgent@@; }
+#custom-void, #window, #clock, #cpu, #memory, #wireplumber, #network, #battery,
+#backlight, #tray, #idle_inhibitor, #custom-power, #mode, #taskbar { padding: 0 11px; }
+#custom-void { color: @@accent@@; padding-left: 14px; }
+#window { color: @@fg_dim@@; }
+#clock { color: @@fg@@; font-weight: bold; }
+#cpu { color: @@info@@; }
+#memory { color: @@accent2@@; }
+#wireplumber { color: @@accent@@; }
+#wireplumber.muted { color: @@fg_dim@@; }
+#network.disconnected { color: @@urgent@@; }
+#battery.charging { color: @@good@@; }
+#battery.warning:not(.charging) { color: @@c3@@; }
+#battery.critical:not(.charging) { color: @@urgent@@; }
+#idle_inhibitor.activated { color: @@c3@@; }
+#custom-power { color: @@urgent@@; padding-right: 14px; }
+#taskbar button { padding: 0 6px; border-radius: @@radius_small@@px; }
+#taskbar button.active { background: rgba(@@accent_rgb@@, 0.22); }
+tooltip { background: rgba(@@bg_rgb@@, 0.92); border: 1px solid @@accent@@; border-radius: @@radius_small@@px; }
+tooltip label { color: @@fg@@; }

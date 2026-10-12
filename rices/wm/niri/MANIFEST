@@ -1,0 +1,2 @@
+# template     destination (relative to $HOME)   mode
+config.kdl     .config/niri/config.kdl           0644

@@ -1,0 +1,2 @@
+# template    destination (relative to $HOME)   mode
+config.py     .config/qtile/config.py           0644

@@ -1,0 +1,3 @@
+# template    destination (relative to $HOME)   mode
+bspwmrc       .config/bspwm/bspwmrc             0755
+sxhkdrc       .config/sxhkd/sxhkdrc             0644

@@ -1,0 +1,62 @@
+#!/bin/sh
+# void-pipewire: start exactly one PipeWire stack for the current session.
+#
+# PipeWire starts WirePlumber and pipewire-pulse itself through
+# /etc/pipewire/pipewire.conf.d (handbook: "Session Management" and
+# "PulseAudio interface"), so `pipewire` is the only process to launch.
+#
+#   void-pipewire          for XDG autostart in full desktops (runs in the
+#                          foreground; does nothing inside a void-session,
+#                          which already started audio)
+#   void-pipewire --bg     start in the background (used by void-session)
+#   void-pipewire --stop   stop this user's PipeWire stack
+#
+# Any running instance is restarted on purpose: a PipeWire left over from a
+# previous login is attached to a D-Bus bus that no longer exists, which
+# breaks Bluetooth, device reservation and portals until a reboot.
+
+uid=$(id -u)
+log="${XDG_RUNTIME_DIR:-/tmp}/void-pipewire.log"
+
+stop_stack() {
+  for p in pipewire-pulse wireplumber pipewire; do
+    pkill -u "$uid" -x "$p" 2>/dev/null
+  done
+  i=0
+  while pgrep -u "$uid" -x pipewire >/dev/null 2>&1 && [ "$i" -lt 30 ]; do
+    sleep 0.1; i=$((i + 1))
+  done
+  for p in pipewire-pulse wireplumber pipewire; do
+    pkill -9 -u "$uid" -x "$p" 2>/dev/null
+  done
+  return 0
+}
+
+case "${1:-}" in
+  --stop) stop_stack; exit 0 ;;
+  --bg|"") ;;
+  *) echo "usage: void-pipewire [--bg|--stop]" >&2; exit 2 ;;
+esac
+
+if [ -z "${1:-}" ] && [ "${VOID_SESSION_AUDIO:-}" = 1 ]; then
+  exit 0
+fi
+
+if [ -z "${XDG_RUNTIME_DIR:-}" ] || [ ! -d "$XDG_RUNTIME_DIR" ]; then
+  echo "void-pipewire: XDG_RUNTIME_DIR is not set up; PipeWire cannot create its socket." >&2
+  echo "               Log in through elogind/greetd/a display manager, or use void-session." >&2
+  exit 1
+fi
+[ -n "${DBUS_SESSION_BUS_ADDRESS:-}" ] || \
+  echo "void-pipewire: warning: no D-Bus session bus. Bluetooth audio and portals need one." >&2
+
+stop_stack
+{
+  echo "---- $(date '+%F %T') starting pipewire (session bus: ${DBUS_SESSION_BUS_ADDRESS:-none})"
+} >>"$log" 2>/dev/null
+
+if [ "${1:-}" = --bg ]; then
+  pipewire >>"$log" 2>&1 &
+  exit 0
+fi
+exec pipewire >>"$log" 2>&1

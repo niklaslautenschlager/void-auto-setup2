@@ -1,0 +1,3 @@
+# template    destination (relative to $HOME)   mode
+spectrwm.conf .spectrwm.conf                   0644
+baraction.sh  .config/spectrwm/baraction.sh    0755

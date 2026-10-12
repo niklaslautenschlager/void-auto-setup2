@@ -1,0 +1,3 @@
+# template    destination (relative to $HOME)   mode
+rc.lua        .config/awesome/rc.lua            0644
+theme.lua     .config/awesome/theme.lua         0644

@@ -1,0 +1,87 @@
+# Glacier keys for dk.
+mod4 + Return
+    rice term
+
+mod4 + {d,space}
+    rice launch
+
+mod4 + q
+    dkcmd win kill
+
+mod4 + f
+    dkcmd win full
+
+mod4 + v
+    dkcmd win float
+
+mod4 + {h,Left,k,Up}
+    dkcmd win focus prev
+
+mod4 + {j,Down,l,Right}
+    dkcmd win focus next
+
+mod4 + shift + {h,Left,k,Up}
+    dkcmd win swap prev
+
+mod4 + shift + {j,Down,l,Right}
+    dkcmd win swap next
+
+mod4 + ctrl + {h,Left}
+    dkcmd set msplit -0.05
+
+mod4 + ctrl + {l,Right}
+    dkcmd set msplit +0.05
+
+mod4 + ctrl + {j,Down}
+    dkcmd set gap +2
+
+mod4 + ctrl + {k,Up}
+    dkcmd set gap -2
+
+mod4 + {1,2,3,4,5,6,7,8,9}
+    dkcmd ws view {1,2,3,4,5,6,7,8,9}
+
+mod4 + shift + {1,2,3,4,5,6,7,8,9}
+    dkcmd ws send {1,2,3,4,5,6,7,8,9}
+
+mod4 + Escape
+    rice lock
+
+mod4 + shift + Escape
+    rice power
+
+mod4 + shift + r
+    dkcmd restart
+
+Print
+    rice shot full
+
+shift + Print
+    rice shot area
+
+XF86AudioRaiseVolume
+    rice vol up
+
+XF86AudioLowerVolume
+    rice vol down
+
+XF86AudioMute
+    rice vol mute
+
+XF86AudioMicMute
+    rice vol mic
+
+XF86MonBrightnessUp
+    rice light up
+
+XF86MonBrightnessDown
+    rice light down
+
+XF86AudioPlay
+    playerctl play-pause
+
+XF86AudioNext
+    playerctl next
+
+XF86AudioPrev
+    playerctl previous

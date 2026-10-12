@@ -1,0 +1,13 @@
+#!/bin/sh
+# Glacier dk configuration. sxhkd owns all keyboard bindings.
+pgrep -x sxhkd >/dev/null 2>&1 || sxhkd -c "$HOME/.config/dk/sxhkdrc" &
+
+dkcmd set numws=9
+dkcmd set ws=_ apply layout=tile master=1 stack=3 gap=@@gaps_out@@ msplit=0.56 ssplit=0.5
+dkcmd set focus_open=true focus_urgent=true focus_mouse=false tile_hints=false
+dkcmd set smart_gap=true smart_border=true mouse mod=mod4 move=button1 resize=button3
+dkcmd set border width=@@border@@ outer_width=1 colour \
+  focus='@@accent@@' unfocus='@@bg_hi@@' urgent='@@urgent@@' \
+  outer_focus='@@bg@@' outer_unfocus='@@bg@@' outer_urgent='@@bg@@'
+dkcmd rule class='^(Pavucontrol|Nm-connection-editor|Blueman-manager)$' float=true
+dkcmd rule apply '*'

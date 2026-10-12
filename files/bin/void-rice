@@ -1,0 +1,335 @@
+#!/bin/bash
+# void-rice: render and deploy the void-postinstall rices.
+#
+#   void-rice list                       rices and the WM each one belongs to
+#   void-rice apply RICE...              render + install for the current user
+#   void-rice apply --installed          every rice whose session is installed
+#   void-rice build dwm|frankenwm        (root) compile the riced binary
+# Options:
+#   --user NAME   (root only) act for another user
+#   --if-missing  only render rices that have never been deployed (used by
+#                 void-session on a user's first login)
+#
+# Rices are plain templates under $VOID_RICE_SRC (default
+# /usr/local/share/void-postinstall/rices). Edit a palette there (or copy it
+# to ~/.config/void-rice/<rice>.conf to override it just for you), then run
+# `void-rice apply <rice>`. Existing configs are backed up to
+# ~/.config/void-rice/.backup/<timestamp>/ before being replaced.
+
+set -euo pipefail
+
+ROOT_PREFIX="${R:-}"     # test hook: operate inside a fake root
+SRC="${VOID_RICE_SRC:-/usr/local/share/void-postinstall/rices}"
+SESS_DIR="${VOID_SESSION_DIR:-/usr/local/share/void-postinstall/sessions}"
+
+declare -A RICE_WM=(
+  [ember]=hyprland [tidewater]=sway [moss]=river [dusk]=niri [orchard]=mango
+  [circuit]=qtile [aurora]=wayfire [graphite]=i3 [copper]=awesome
+  [monolith]=dwm [glacier]=dk [bolt]=frankenwm [dune]=leftwm
+  [spectrum]=spectrwm [sakura]=bspwm
+)
+declare -A RICE_TYPE=(
+  [ember]=wayland [tidewater]=wayland [moss]=wayland [dusk]=wayland [orchard]=wayland
+  [circuit]=both [aurora]=wayland [graphite]=x11 [copper]=x11 [monolith]=x11
+  [glacier]=x11 [bolt]=x11 [dune]=x11 [spectrum]=x11 [sakura]=x11
+)
+# session id(s) -> rice
+declare -A SESSION_RICE=(
+  [hyprland]=ember [sway]=tidewater [river]=moss [niri]=dusk [mango]=orchard
+  [qtile-wl]=circuit [qtile-x11]=circuit [wayfire]=aurora [i3]=graphite
+  [awesome]=copper [dwm]=monolith [dk]=glacier [frankenwm]=bolt [leftwm]=dune
+  [spectrwm]=spectrum [bspwm]=sakura
+)
+
+die()  { echo "void-rice: $*" >&2; exit 1; }
+say()  { printf '\033[1;34m  ->\033[0m %s\n' "$*"; }
+
+# ---------------------------------------------------------------------------
+# arguments
+# ---------------------------------------------------------------------------
+cmd="${1:-}"; [ $# -gt 0 ] && shift
+USER_T="$(id -un)" IF_MISSING=0 INSTALLED=0
+ARGS=()
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --user) USER_T="$2"; shift ;;
+    --if-missing) IF_MISSING=1 ;;
+    --installed) INSTALLED=1 ;;
+    *) ARGS+=("$1") ;;
+  esac
+  shift
+done
+if [ "$USER_T" != "$(id -un)" ] && [ "$(id -u)" -ne 0 ]; then
+  die "--user needs root"
+fi
+
+passwd_field() { awk -F: -v u="$USER_T" -v f="$1" '$1 == u { print $f }' "$ROOT_PREFIX/etc/passwd"; }
+HOME_T="$(passwd_field 6)"
+[ -n "$HOME_T" ] || die "unknown user $USER_T"
+UID_T="$(passwd_field 3)" GID_T="$(passwd_field 4)"
+H="$ROOT_PREFIX$HOME_T"
+RICE_HOME="$H/.config/void-rice"
+STAMP="$(date +%Y%m%d-%H%M%S)"
+BACKUP="$RICE_HOME/.backup/$STAMP"
+AS_ROOT=0; [ "$(id -u)" -eq 0 ] && [ "$UID_T" != 0 ] && AS_ROOT=1
+TOUCHED=()
+
+# ---------------------------------------------------------------------------
+# palette + rendering
+# ---------------------------------------------------------------------------
+declare -A PAL=()
+_kv_file() { # FILE: load key='value' lines into PAL
+  local line k v
+  [ -r "$1" ] || return 0
+  while IFS= read -r line || [ -n "$line" ]; do
+    [[ "$line" =~ ^([a-z0-9_]+)=\'(.*)\'[[:space:]]*$ ]] || continue
+    k="${BASH_REMATCH[1]}" v="${BASH_REMATCH[2]}"
+    PAL[$k]="$v"
+  done <"$1"
+}
+
+load_palette() {
+  local rice="$1" k v r g b
+  PAL=()
+  [ -r "$SRC/palettes/$rice.conf" ] || die "no palette for rice '$rice'"
+  PAL[kb_layout]=us
+  _kv_file "$ROOT_PREFIX/etc/void-postinstall/settings.conf"   # system defaults
+  _kv_file "$H/.config/void-rice/settings.conf"               # user overrides
+  _kv_file "$SRC/icons.conf"
+  _kv_file "$SRC/palettes/$rice.conf"
+  _kv_file "$H/.config/void-rice/$rice.conf"            # personal override
+  _kv_file "$SRC/wm/${RICE_WM[$rice]}/vars"
+  for k in font_size bar_h radius gaps_out bar_margin; do
+    v="${PAL[$k]:-}"
+    [[ "$v" =~ ^[0-9]{1,3}$ ]] || die "palette value '$k' must be a non-negative integer"
+    PAL[$k]=$((10#$v))
+  done
+  [ "${PAL[font_size]}" -gt 0 ] || die "palette value 'font_size' must be greater than zero"
+  [ "${PAL[bar_h]}" -gt 0 ] || die "palette value 'bar_h' must be greater than zero"
+  for k in "${!PAL[@]}"; do
+    v="${PAL[$k]}"
+    if [[ "$v" =~ ^#([0-9a-fA-F]{2})([0-9a-fA-F]{2})([0-9a-fA-F]{2})$ ]]; then
+      PAL[${k}_hex]="${v#\#}"
+      PAL[${k}_xcolor]="rgb:${BASH_REMATCH[1]}/${BASH_REMATCH[2]}/${BASH_REMATCH[3]}"
+      r=$((16#${BASH_REMATCH[1]})) g=$((16#${BASH_REMATCH[2]})) b=$((16#${BASH_REMATCH[3]}))
+      PAL[${k}_rgb]="$r, $g, $b"
+    fi
+  done
+  PAL[rice]="$rice"
+  PAL[rice_dir]="$HOME_T/.config/void-rice/$rice"
+  PAL[home]="$HOME_T"
+  PAL[user]="$USER_T"
+  PAL[font_px]=$(( ${PAL[font_size]} * 4 / 3 ))
+  PAL[bar_inner]=$(( ${PAL[bar_h]} - 8 ))
+  PAL[radius_small]=$(( ${PAL[radius]} / 2 ))
+  PAL[gaps_half]=$(( ${PAL[gaps_out]} / 2 ))
+  # polybar geometry/style derived from bar_style + bar_margin
+  local m="${PAL[bar_margin]:-0}"
+  if [ "${PAL[bar_style]:-flat}" = underline ]; then
+    PAL[pb_focus_bg]='${colors.bg-alt}' PAL[pb_focus_fg]='${colors.fg}' PAL[pb_line]=3
+  else
+    PAL[pb_focus_bg]='${colors.accent}' PAL[pb_focus_fg]='${colors.bg}' PAL[pb_line]=0
+  fi
+  if [ "$m" -gt 0 ]; then
+    PAL[pb_width]="100%:-$((2 * m))" PAL[pb_offset]="$m" PAL[pb_radius]="${PAL[radius]}" PAL[pb_border]=1
+  else
+    PAL[pb_width]="100%" PAL[pb_offset]=0 PAL[pb_radius]=0 PAL[pb_border]=0
+  fi
+  [ "${PAL[bar_pos]:-top}" = bottom ] && PAL[pb_bottom]=true || PAL[pb_bottom]=false
+  [ "${PAL[bar_pos]:-top}" = bottom ] && PAL[spectrwm_bar_bottom]=1 || PAL[spectrwm_bar_bottom]=0
+  [ "$m" -gt 0 ] && PAL[spectrwm_bar_border]=1 || PAL[spectrwm_bar_border]=0
+  : "${PAL[pb_ws_module]:=xworkspaces}" "${PAL[pb_wm_restack]:=ewmh}"
+  SED_SCRIPT="$(mktemp)"
+  for k in "${!PAL[@]}"; do
+    v="${PAL[$k]}"
+    v="${v//\\/\\\\}"; v="${v//&/\\&}"
+    printf 's\001@@%s@@\001%s\001g\n' "$k" "$v" >>"$SED_SCRIPT"
+  done
+}
+
+# render TEMPLATE: substituted text on stdout; unknown placeholders are fatal
+render() {
+  local out
+  out="$(sed -f "$SED_SCRIPT" "$1")"
+  if grep -qoE '@@[a-z0-9_]+@@' <<<"$out"; then
+    die "unresolved placeholder(s) in ${1#"$SRC"/}: $(grep -oE '@@[a-z0-9_]+@@' <<<"$out" | sort -u | tr '\n' ' ')"
+  fi
+  printf '%s\n' "$out"
+}
+
+# ---------------------------------------------------------------------------
+# deployment
+# ---------------------------------------------------------------------------
+# deploy REL MODE < content: install into the user's home, backing up a
+# different existing file first
+deploy() {
+  local rel="$1" mode="$2" dest="$H/$1" tmp
+  tmp="$(mktemp)"
+  cat >"$tmp"
+  if [ -e "$dest" ] && ! cmp -s "$tmp" "$dest"; then
+    case "$rel" in .config/void-rice/*) ;; *)
+      mkdir -p "$(dirname "$BACKUP/$rel")"
+      cp -a "$dest" "$BACKUP/$rel"
+    esac
+  fi
+  mkdir -p "$(dirname "$dest")"
+  install -m "$mode" "$tmp" "$dest"
+  rm -f "$tmp"
+  TOUCHED+=("$(cut -d/ -f1-2 <<<"$rel")")
+}
+
+render_to() { # TEMPLATE REL [MODE]
+  render "$1" | deploy "$2" "${3:-0644}"
+}
+
+fix_ownership() {
+  [ "$AS_ROOT" = 1 ] || return 0
+  local d
+  for d in .config .local .local/state "${TOUCHED[@]}"; do
+    [ -e "$H/$d" ] || continue
+    case "$d" in .config|.local|.local/state) chown "$UID_T:$GID_T" "$H/$d" ;;
+      *) chown -R "$UID_T:$GID_T" "$H/$d" ;; esac
+  done
+  [ -d "$H/.config/void-rice" ] && chown -R "$UID_T:$GID_T" "$H/.config/void-rice"
+  return 0
+}
+
+write_palette_sh() {
+  local k v
+  for k in $(printf '%s\n' "${!PAL[@]}" | sort); do
+    case "$k" in i_*|*_rgb) continue ;; esac
+    v="${PAL[$k]//\'/\'\\\'\'}"
+    printf "%s='%s'\n" "$k" "$v"
+  done
+}
+
+apply_rice() {
+  local rice="$1" wm type rd c line tpl dest mode
+  [ -n "${RICE_WM[$rice]:-}" ] || die "unknown rice '$rice' (see: void-rice list)"
+  wm="${RICE_WM[$rice]}" type="${RICE_TYPE[$rice]}"
+  rd=".config/void-rice/$rice"
+  if [ "$IF_MISSING" = 1 ] && [ -e "$H/$rd/palette.sh" ]; then
+    return 0
+  fi
+  load_palette "$rice"
+  say "rice ${PAL[name]} ($wm) for $USER_T"
+
+  { echo "# generated by void-rice from palettes/$rice.conf, do not edit, edit the palette"; write_palette_sh; } \
+    | deploy "$rd/palette.sh" 0644
+  if [ -r "$SRC/wallpapers/$rice.jpg" ]; then
+    deploy "$rd/wallpaper.jpg" 0644 <"$SRC/wallpapers/$rice.jpg"
+  fi
+
+  for c in foot.ini alacritty.toml rofi.rasi; do
+    render_to "$SRC/common/$c" "$rd/$c"
+  done
+  if [ "$type" != x11 ]; then
+    render_to "$SRC/common/mako.ini" "$rd/mako.ini"
+    render_to "$SRC/common/swaylock.conf" "$rd/swaylock.conf"
+  fi
+  if [ "$type" != wayland ]; then
+    render_to "$SRC/common/dunstrc" "$rd/dunstrc"
+    render_to "$SRC/common/picom.conf" "$rd/picom.conf"
+  fi
+  case "${PAL[rice_bar]}" in
+    waybar)
+      render_to "$SRC/wm/$wm/waybar.jsonc" "$rd/waybar/config.jsonc"
+      render_to "$SRC/common/waybar/modules.jsonc" "$rd/waybar/modules.jsonc"
+      render_to "$SRC/common/waybar/style-${PAL[bar_style]:-pills}.css" "$rd/waybar/style.css" ;;
+    polybar)
+      render_to "$SRC/common/polybar.ini" "$rd/polybar.ini" ;;
+  esac
+
+  # WM-specific files: "template  destination-relative-to-HOME  mode"
+  while read -r tpl dest mode; do
+    [ -n "$tpl" ] && [ "${tpl:0:1}" != "#" ] || continue
+    [ "$tpl" != vars ] || continue
+    render_to "$SRC/wm/$wm/$tpl" "$dest" "${mode:-0644}"
+  done <"$SRC/wm/$wm/MANIFEST"
+
+  rm -f "$SED_SCRIPT"
+}
+
+installed_rices() {
+  local f id seen=" "
+  for f in "$ROOT_PREFIX$SESS_DIR"/*.env; do
+    [ -e "$f" ] || continue
+    id="$(basename "$f" .env)"
+    r="${SESSION_RICE[$id]:-}"
+    [ -n "$r" ] || continue
+    case "$seen" in *" $r "*) continue ;; esac
+    seen+="$r "
+    echo "$r"
+  done
+}
+
+# ---------------------------------------------------------------------------
+# compile-time configured WMs (dwm, frankenwm)
+# ---------------------------------------------------------------------------
+build_wm() {
+  local wm="$1" rice url sum tarball work cfg dir
+  [ "$(id -u)" -eq 0 ] || die "build needs root (installs to /usr/local/bin)"
+  case "$wm" in
+    dwm)       rice=monolith url="https://dl.suckless.org/dwm/dwm-6.8.tar.gz"
+               sum=bcf540589ad174d4073f4efa658828411e2f5ba63196cfaf6b71363700f590b7 ;;
+    frankenwm) rice=bolt url="https://github.com/sulami/FrankenWM/archive/v1.0.23.tar.gz"
+               sum=64f63f8fcd824d892087b62f9459a2eba7d3dc29ae39a4558315297b32afdf6a ;;
+    *) die "nothing to build for '$wm'" ;;
+  esac
+  load_palette "$rice"
+  work="$(mktemp -d)"
+  tarball="$work/src.tar.gz"
+  say "downloading $url"
+  if [ -n "${VOID_RICE_TARBALL:-}" ]; then cp "$VOID_RICE_TARBALL" "$tarball"
+  else
+    if command -v xbps-fetch >/dev/null 2>&1; then xbps-fetch -o "$tarball" "$url" >/dev/null
+    else curl -fsSL -o "$tarball" "$url"; fi
+  fi
+  if [ -z "${VOID_RICE_TARBALL:-}" ]; then
+    echo "$sum  $tarball" | sha256sum -c --quiet - || die "checksum mismatch for $url"
+  fi
+  tar -xzf "$tarball" -C "$work"
+  dir="$(find "$work" -mindepth 1 -maxdepth 1 -type d | head -n1)"
+  cfg="$dir/config.h"
+  cp "$dir/config.def.h" "$cfg"
+  # The rice patches upstream's config.def.h instead of replacing it, so a
+  # newer upstream with new settings still compiles.
+  bash "$SRC/wm/$wm/patch-config.sh" "$cfg" "$SED_SCRIPT"
+  say "compiling $wm"
+  if [ "$wm" = dwm ]; then
+    make -C "$dir" -s PREFIX=/usr/local \
+      INCS="-I/usr/include/freetype2" LIBS="-lX11 -lXinerama -lfontconfig -lXft" >/dev/null
+    install -m 0755 "$dir/dwm" "$ROOT_PREFIX/usr/local/bin/dwm"
+  else
+    make -C "$dir" -s >/dev/null
+    install -m 0755 "$dir/frankenwm" "$ROOT_PREFIX/usr/local/bin/frankenwm"
+  fi
+  mkdir -p "$ROOT_PREFIX/usr/local/share/void-postinstall/build"
+  cp "$cfg" "$ROOT_PREFIX/usr/local/share/void-postinstall/build/$wm-config.h"
+  rm -rf "$work" "$SED_SCRIPT"
+  say "installed /usr/local/bin/$wm (config kept in /usr/local/share/void-postinstall/build/$wm-config.h)"
+}
+
+# ---------------------------------------------------------------------------
+case "$cmd" in
+  list)
+    for r in $(printf '%s\n' "${!RICE_WM[@]}" | sort); do
+      _kv_file "$SRC/palettes/$r.conf"
+      printf '  %-10s %-10s %-8s %s\n' "$r" "${RICE_WM[$r]}" "${RICE_TYPE[$r]}" "${PAL[desc]:-}"
+    done ;;
+  apply)
+    rices=("${ARGS[@]}")
+    if [ "$INSTALLED" = 1 ]; then mapfile -t rices < <(installed_rices); fi
+    [ "${#rices[@]}" -gt 0 ] || die "which rice? (void-rice list)"
+    for r in "${rices[@]}"; do apply_rice "$r"; done
+    fix_ownership
+    if [ -d "$BACKUP" ]; then
+      say "previous configs backed up to ${BACKUP#"$ROOT_PREFIX"}"
+      [ "$AS_ROOT" = 1 ] && chown -R "$UID_T:$GID_T" "$RICE_HOME/.backup"
+    fi ;;
+  build)
+    [ "${#ARGS[@]}" -eq 1 ] || die "usage: void-rice build dwm|frankenwm"
+    build_wm "${ARGS[0]}" ;;
+  ""|-h|--help|help) sed -n '2,20p' "$0" ;;
+  *) die "unknown command '$cmd'" ;;
+esac

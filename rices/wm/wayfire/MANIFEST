@@ -1,0 +1,2 @@
+# template    destination (relative to $HOME)   mode
+config.ini    .config/wayfire/wayfire.ini       0644

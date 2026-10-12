@@ -1,0 +1,4 @@
+# template        destination (relative to $HOME)      mode
+hyprland.lua      .config/hypr/hyprland.lua            0644
+hyprlock.conf     .config/hypr/hyprlock.conf           0644
+hypridle.conf     .config/hypr/hypridle.conf           0644
