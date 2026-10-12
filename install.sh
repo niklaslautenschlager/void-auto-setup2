@@ -15,6 +15,34 @@ for lib in common prompt system hardware catalog xbps hyprland audio session; do
   # shellcheck source=/dev/null
   . "$ROOT_DIR/lib/$lib.sh"
 done
+
+# ----------------------------------------------------------------------------
+# Splash screen
+# ----------------------------------------------------------------------------
+_splashscreen_fallback() {
+  cat <<'EOF'
+██╗   ██╗  ██████╗  ██╗██████╗
+██║   ██║ ██╔═══██╗ ██║██╔══██╗
+██║   ██║ ██║   ██║ ██║██║  ██║
+╚██╗ ██╔╝ ██║   ██║ ██║██║  ██║
+ ╚████╔╝  ╚██████╔╝ ██║██████╔╝
+  ╚═══╝    ╚═════╝  ╚═╝╚═════╝
+
+ ██╗███╗   ██╗███████╗████████╗ █████╗ ██╗     ██╗     ███████╗██████╗
+ ██║████╗  ██║██╔════╝╚══██╔══╝██╔══██╗██║     ██║     ██╔════╝██╔══██╗
+ ██║██╔██╗ ██║███████╗   ██║   ███████║██║     ██║     █████╗  ██████╔╝
+ ██║██║╚██╗██║╚════██║   ██║   ██╔══██║██║     ██║     ██╔══╝  ██╔══██╗
+ ██║██║ ╚████║███████║   ██║   ██║  ██║███████╗███████╗███████╗██║  ██║
+ ╚═╝╚═╝  ╚═══╝╚══════╝   ╚═╝  ╚═╝  ╚═╝╚══════╝╚══════╝╚══════╝╚═╝  ╚═╝
+EOF
+}
+_splashscreen() {
+  [ -t 1 ] || return 0
+  if [ -r "$ROOT_DIR/files/splash.txt" ]; then cat "$ROOT_DIR/files/splash.txt"
+  else _splashscreen_fallback; fi
+  printf '\n'
+}
+_splashscreen
 if [ -z "$R" ] && [ "$(id -u)" -ne 0 ]; then die "Run this installer as root (sudo ./install.sh)."; fi
 command -v xbps-install >/dev/null 2>&1 || [ -n "$R" ] || die "xbps-install is required."
 prompt_init
@@ -26,6 +54,12 @@ info "platform: $ARCH / $LIBC"
 info "graphics: ${GPU_VENDORS[*]:-not detected}"
 info "CPU: ${CPU_VENDOR:-not detected}; Bluetooth: $([ "$HAS_BLUETOOTH" = 1 ] && echo detected || echo not detected)"
 [ -n "$VM_KIND" ] && info "virtual machine: $VM_KIND"
+
+# Catalog lookups that tolerate missing keys under `set -u`.
+cat_name() { printf '%s' "${NAME[$1]:-$1}"; }
+cat_kind() { printf '%s' "${KIND[$1]:-wm}"; }
+cat_type() { printf '%s' "${TYPE[$1]:-x11}"; }
+cat_pkgs() { printf '%s' "${PKGS[$1]:-}"; }
 
 select_target_user() {
   local users=() entries=() u
@@ -62,10 +96,16 @@ if ! hv_supported; then
 fi
 SEL_SESSIONS=()
 menu_many SEL_SESSIONS "Choose desktop environments and window managers" "" "${MENU_ENTRIES[@]}"
-SEL_DES=() SEL_WMS=()
+SEL_DES=() SEL_WMS=() valid_sessions=()
 for id in "${SEL_SESSIONS[@]}"; do
-  if [ "${KIND[$id]}" = de ]; then SEL_DES+=("$id"); else SEL_WMS+=("$id"); fi
+  if [ -z "$(cat_pkgs "$id")" ]; then
+    warn "Session '$id' has no package list in the catalog; skipping."
+    continue
+  fi
+  valid_sessions+=("$id")
+  if [ "$(cat_kind "$id")" = de ]; then SEL_DES+=("$id"); else SEL_WMS+=("$id"); fi
 done
+SEL_SESSIONS=("${valid_sessions[@]}")
 if [ "${#SEL_DES[@]}" -gt 0 ]; then SEAT=elogind
 else
   menu_one SEAT "Choose session/device management" elogind \
@@ -145,6 +185,18 @@ APP_CATEGORIES=()
 menu_many APP_CATEGORIES "Optional application groups" "" \
   browser='Web browser' media='Media tools' office='Office suite' \
   creative='Image and graphics tools' developer='Developer tools' files='File manager and archives'
+
+# AI coding CLIs, installed globally through npm (nodejs comes from xbps).
+declare -A AI_NPM=(
+  [claude]='@anthropic-ai/claude-code'
+  [codex]='@openai/codex'
+  [gemini]='@google/gemini-cli'
+  [opencode]='opencode-ai'
+)
+AI_CLIS=()
+menu_many AI_CLIS "Optional AI coding CLIs (installed via npm)" "" \
+  claude='Claude Code' codex='OpenAI Codex CLI' gemini='Google Gemini CLI' opencode='opencode'
+
 printf '\nInstallation plan\n'
 printf '  User: %s%s\n' "$TARGET_USER" "$([ "$CREATE_USER" = 1 ] && echo ' (create)' || :)"
 printf '  Sessions: %s\n' "${SEL_SESSIONS[*]:-none}"
@@ -153,6 +205,7 @@ printf '  Graphics: %s%s\n' "$GPU_MODE" "${NVIDIA_PKG:+ ($NVIDIA_PKG)}"
 printf '  32-bit/Steam/network manager: %s / %s / %s\n' "$WANT_32BIT" "$WANT_STEAM" "$WANT_NM"
 printf '  Microcode/Bluetooth/keyboard: %s / %s / %s\n' "$WANT_MICROCODE" "$WANT_BLUETOOTH" "$KEYBOARD_LAYOUT"
 printf '  App groups: %s\n' "${APP_CATEGORIES[*]:-none}"
+printf '  AI CLIs: %s\n' "${AI_CLIS[*]:-none}"
 ask_yn "Proceed with this plan?" n || die "Cancelled before changing the system."
 
 log_init
@@ -192,13 +245,13 @@ if [ "$WANT_MICROCODE" = 1 ]; then
   if [ "$CPU_VENDOR" = intel ]; then want "CPU microcode" intel-ucode; else want "CPU microcode" amd-ucode; fi
 fi
 for id in "${SEL_DES[@]}"; do
-  read -r -a packages <<< "${PKGS[$id]}"
-  want "Desktop: ${NAME[$id]}" "${packages[@]}"
+  read -r -a packages <<< "$(cat_pkgs "$id")"
+  want "Desktop: $(cat_name "$id")" "${packages[@]}"
 done
 for id in "${SEL_WMS[@]}"; do
-  read -r -a packages <<< "${PKGS[$id]}"
-  want "Window manager: ${NAME[$id]}" "${packages[@]}"
-  if [ "${TYPE[$id]}" = wayland ]; then read -r -a packages <<< "$RICE_WAYLAND_PKGS"
+  read -r -a packages <<< "$(cat_pkgs "$id")"
+  want "Window manager: $(cat_name "$id")" "${packages[@]}"
+  if [ "$(cat_type "$id")" = wayland ]; then read -r -a packages <<< "$RICE_WAYLAND_PKGS"
   else read -r -a packages <<< "$RICE_X11_PKGS"; fi
   want "Rice tools" "${packages[@]}"
 done
@@ -249,12 +302,29 @@ for category in "${APP_CATEGORIES[@]}"; do
     files) want_first "Apps: file manager" Thunar pcmanfm; want "Apps: archives" file-roller p7zip ;;
   esac
 done
+[ "${#AI_CLIS[@]}" -gt 0 ] && want "AI CLIs: runtime" nodejs
 
 xbps_install_queue
 HV_OK=0
 if [ "$HV_SELECTED" = 1 ]; then
-  read -r -a hv_packages <<< "${HV[hyprland]}"
-  if hv_install "${hv_packages[@]}"; then HV_OK=1; fi
+  read -r -a hv_packages <<< "${HV[hyprland]:-}"
+  if [ "${#hv_packages[@]}" -eq 0 ]; then
+    warn "No Hyprland package list in the catalog; skipping Hyprland install."
+  elif hv_install "${hv_packages[@]}"; then HV_OK=1; fi
+fi
+if [ "${#AI_CLIS[@]}" -gt 0 ]; then
+  if [ -n "$R" ]; then
+    warn "AI CLIs are installed with the host's npm; skipped because R=$R targets another root."
+  elif ! command -v npm >/dev/null 2>&1 && [ "$DRY_RUN" != 1 ]; then
+    warn "npm not found after installing nodejs; AI CLIs were not installed."
+  else
+    msg "Installing AI CLIs"
+    for cli in "${AI_CLIS[@]}"; do
+      pkg="${AI_NPM[$cli]:-}"
+      if [ -z "$pkg" ]; then warn "Unknown AI CLI '$cli'; skipping."; continue; fi
+      if ! run npm install -g "$pkg"; then warn "npm install of $pkg failed."; fi
+    done
+  fi
 fi
 [ "$CREATE_USER" = 1 ] && create_user "$TARGET_USER"
 enable_service dbus
@@ -327,5 +397,8 @@ if [ "$LOGIN_MANAGER" = greetd ]; then
   enable_service_next_boot greetd
 elif [ "$LOGIN_MANAGER" != none ]; then enable_service_next_boot "$LOGIN_MANAGER"; fi
 printf '\nSetup finished. Log: %s\n' "$LOG"
-if [ "${#WARNINGS[@]}" -gt 0 ]; then printf 'Warnings: %s\n' "${WARNINGS[@]}"; printf '  - %s\n' "${WARNINGS[@]}"; fi
+if [ "${#WARNINGS[@]}" -gt 0 ]; then
+  printf 'Warnings:\n'
+  printf '  - %s\n' "${WARNINGS[@]}"
+fi
 ask_yn "Reboot now?" n && run reboot || :
